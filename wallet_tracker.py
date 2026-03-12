@@ -1,4 +1,4 @@
-import logging
+mport logging
 from typing import List, Dict
 from collections import defaultdict
 from polymarket_api import PolymarketAPI
@@ -35,7 +35,13 @@ class WalletTracker:
         scored_wallets = []
 
         for trader in traders:
-            address = trader.get("proxyWallet") or trader.get("proxy_wallet") or trader.get("address")
+            # Data API usa "proxyWallet" como campo de dirección
+            address = (
+                trader.get("proxyWallet") or
+                trader.get("proxy_wallet") or
+                trader.get("address") or
+                trader.get("user")
+            )
             if not address:
                 continue
 
@@ -243,6 +249,5 @@ class WalletTracker:
         logger.info(f"🎯 Señales BTC con consenso >= {min_consensus}: {len(signals)}")
         return signals
 
-
+        
       
-    
