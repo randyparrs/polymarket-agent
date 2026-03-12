@@ -122,22 +122,24 @@ class PolymarketAPI:
         return btc_trades
 
     def get_top_traders(self, limit: int = 60) -> List[Dict]:
-        """Obtener top traders del leaderboard"""
-        try:
-            response = self.session.get(
-                f"{DATA_API}/v1/leaderboard",
-                params={"limit": limit},
-                timeout=10
-            )
-            response.raise_for_status()
-            data = response.json()
-            # La API devuelve lista directa o dict con key "data"
-            if isinstance(data, list):
-                return data
-            return data.get("data", data)
-        except Exception as e:
-            logger.error(f"Error obteniendo leaderboard: {e}")
-            return []
+        """Obtener top traders del leaderboard — ventana 30 días"""
+        for window in ["30d", "7d", "all"]:
+            try:
+                response = self.session.get(
+                    f"{DATA_API}/v1/leaderboard",
+                    params={"limit": limit, "window": window},
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+                result = data if isinstance(data, list) else data.get("data", [])
+                if result:
+                    logger.info(f"✅ Leaderboard obtenido (window={window}): {len(result)} traders")
+                    return result
+            except Exception as e:
+                logger.error(f"Error leaderboard window={window}: {e}")
+                continue
+        return []
 
     def get_market_by_id(self, market_id: str) -> Dict:
         """Obtener detalles de un mercado"""
@@ -151,3 +153,5 @@ class PolymarketAPI:
         except Exception as e:
             logger.error(f"Error obteniendo mercado {market_id}: {e}")
             return {}
+
+        
