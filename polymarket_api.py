@@ -4,8 +4,9 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-POLYMARKET_API = "https://gamma-api.polymarket.com"
-CLOB_API = "https://clob.polymarket.com"
+POLYMARKET_API  = "https://gamma-api.polymarket.com"
+DATA_API        = "https://data-api.polymarket.com"
+CLOB_API        = "https://clob.polymarket.com"
 
 # Keywords para detectar mercados de BTC
 BTC_KEYWORDS = [
@@ -124,12 +125,16 @@ class PolymarketAPI:
         """Obtener top traders del leaderboard"""
         try:
             response = self.session.get(
-                f"{POLYMARKET_API}/leaderboard",
+                f"{DATA_API}/v1/leaderboard",
                 params={"limit": limit},
                 timeout=10
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            # La API devuelve lista directa o dict con key "data"
+            if isinstance(data, list):
+                return data
+            return data.get("data", data)
         except Exception as e:
             logger.error(f"Error obteniendo leaderboard: {e}")
             return []
