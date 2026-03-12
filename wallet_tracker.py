@@ -5,92 +5,89 @@ from polymarket_api import PolymarketAPI
 
 logger = logging.getLogger(__name__)
 
-# ── Filtros de calidad ──────────────────────────────────────────
-MIN_TOTAL_TRADES    = 10     # Mínimo trades totales
-MIN_BTC_TRADES      = 2      # Mínimo trades en mercados BTC
-MIN_ROI_PERCENT     = 10     # ROI mínimo (%)
-MIN_WIN_RATE        = 0.50   # Win rate mínimo (50%)
-TOP_WALLETS_TARGET  = 15     # Cuántas wallets queremos al final
-# ───────────────────────────────────────────────────────────────
+# Filtros de calidad
+MIN_TOTAL_TRADES    = 10
+MIN_BTC_TRADES      = 2
+MIN_ROI_PERCENT     = 10
+MIN_WIN_RATE        = 0.50
+TOP_WALLETS_TARGET  = 15
 
 class WalletTracker:
     def __init__(self, api: PolymarketAPI):
         self.api = api
 
     def get_top_wallets(self, count: int = TOP_WALLETS_TARGET) -> List[str]:
-        """
-        Obtener las mejores wallets rankeadas por:
-        1. ROI en mercados BTC
-        2. Actividad (número de trades BTC)
-        3. Win rate en BTC
-        """
         logger.info("🔍 Buscando top wallets especializadas en BTC...")
-
         traders = self.api.get_top_traders(limit=count * 4)
 
         if not traders:
             logger.warning("⚠️ No se pudo obtener leaderboard")
             return []
 
+        # Log estructura para debugging
+        if traders:
+            logger.info(f"🔎 Campos del leaderboard: {list(traders[0].keys())}")
+            logger.info(f"🔎 Ejemplo trader: {traders[0]}")
+
         scored_wallets = []
 
         for trader in traders:
-            # Data API usa "proxyWallet" como campo de dirección
             address = (
                 trader.get("proxyWallet") or
                 trader.get("proxy_wallet") or
                 trader.get("address") or
                 trader.get("user")
             )
-            if not address:
+            if not address or len(str(address)) < 10:
                 continue
 
-            stats = self._analyze_btc_wallet(address)
+            stats = self._analyze_btc_wallet(str(address))
 
-            if not self._passes_filter(stats, address):
-                continue
+            if self._passes_filter(stats, str(address)):
+                score = (
+                    stats["roi"] * 0.6 +
+                    min(stats["btc_trades"], 100) * 0.2 +
+                    stats["win_rate"] * 100 * 0.2
+                )
+                scored_wallets.append({
+                    "address": str(address),
+                    "score": score,
+                    **stats
+                })
 
-            # Score combinado: ROI (60%) + Actividad (20%) + Win rate (20%)
-            score = (
-                stats["roi"] * 0.6 +
-                min(stats["btc_trades"], 100) * 0.2 +   # cap a 100 para no sesgar
-                stats["win_rate"] * 100 * 0.2
+        if scored_wallets:
+            scored_wallets.sort(key=lambda x: x["score"], reverse=True)
+            top = scored_wallets[:count]
+            logger.info(f"🏆 Top {len(top)} wallets BTC por ROI/actividad")
+            for i, w in enumerate(top, 1):
+                logger.info(f"  #{i} {w['address'][:10]}... ROI:{w['roi']:.1f}% Win:{w['win_rate']*100:.1f}% Trades:{w['btc_trades']}")
+            return [w["address"] for w in top]
+
+        # Fallback: usar top wallets del leaderboard sin filtro BTC
+        logger.warning("⚠️ Sin historial BTC suficiente — usando top leaderboard directamente")
+        fallback = []
+        for trader in traders:
+            address = (
+                trader.get("proxyWallet") or
+                trader.get("proxy_wallet") or
+                trader.get("address") or
+                trader.get("user")
             )
+            if address and len(str(address)) > 10:
+                fallback.append(str(address))
+            if len(fallback) >= count:
+                break
 
-            scored_wallets.append({
-                "address": address,
-                "score": score,
-                "roi": stats["roi"],
-                "win_rate": stats["win_rate"],
-                "btc_trades": stats["btc_trades"],
-                "total_trades": stats["total_trades"]
-            })
-
-        # Ordenar por score descendente
-        scored_wallets.sort(key=lambda x: x["score"], reverse=True)
-        top = scored_wallets[:count]
-
-        logger.info(f"🏆 Top {len(top)} wallets BTC seleccionadas:")
-        for i, w in enumerate(top, 1):
-            logger.info(
-                f"  #{i} {w['address'][:10]}... | "
-                f"ROI: {w['roi']:.1f}% | "
-                f"Win: {w['win_rate']*100:.1f}% | "
-                f"Trades BTC: {w['btc_trades']}"
-            )
-
-        return [w["address"] for w in top]
+        logger.info(f"📋 Fallback: {len(fallback)} wallets del leaderboard")
+        return fallback
 
     def _analyze_btc_wallet(self, address: str) -> Dict:
-        """Analizar rendimiento de una wallet específicamente en mercados BTC"""
         all_trades = self.api.get_wallet_trades(address, limit=200)
 
         if not all_trades:
             return self._empty_stats()
 
         total_trades = len(all_trades)
-
-        # Filtrar solo trades de BTC cerrados
         btc_wins = 0
         btc_losses = 0
         total_invested = 0
@@ -98,21 +95,18 @@ class WalletTracker:
 
         for trade in all_trades:
             try:
-                title = trade.get("title", "").lower()
+                title = str(trade.get("title", "") or trade.get("market", "")).lower()
                 outcome = trade.get("outcome", "")
-                price = float(trade.get("price", 0))
-                size = float(trade.get("size", 0))
+                price = float(trade.get("price", 0) or 0)
+                size = float(trade.get("size", 0) or 0)
 
-                # Verificar si es mercado BTC
                 from polymarket_api import BTC_KEYWORDS
                 is_btc = any(kw in title for kw in BTC_KEYWORDS)
                 if not is_btc:
                     continue
 
-                # Solo trades con resultado
                 if outcome not in ["WIN", "LOSE", "yes", "no"]:
                     continue
-
                 if price <= 0 or size <= 0:
                     continue
 
@@ -146,18 +140,13 @@ class WalletTracker:
         }
 
     def _passes_filter(self, stats: Dict, address: str) -> bool:
-        """Verificar si una wallet pasa los filtros de calidad"""
         if stats["total_trades"] < MIN_TOTAL_TRADES:
-            logger.debug(f"❌ {address[:10]}... actividad baja: {stats['total_trades']} trades")
             return False
         if stats["btc_trades"] < MIN_BTC_TRADES:
-            logger.debug(f"❌ {address[:10]}... pocos trades BTC: {stats['btc_trades']}")
             return False
         if stats["roi"] < MIN_ROI_PERCENT:
-            logger.debug(f"❌ {address[:10]}... ROI BTC bajo: {stats['roi']:.1f}%")
             return False
         if stats["win_rate"] < MIN_WIN_RATE:
-            logger.debug(f"❌ {address[:10]}... win rate bajo: {stats['win_rate']*100:.1f}%")
             return False
         return True
 
@@ -165,11 +154,6 @@ class WalletTracker:
         return {"roi": 0, "win_rate": 0, "btc_trades": 0, "total_trades": 0, "profit": 0}
 
     def get_consensus_signals(self, wallets: List[str], min_consensus: int = 5) -> List[Dict]:
-        """
-        Detectar señales de consenso SOLO en mercados BTC activos.
-        Mínimo 5 de 15 wallets de acuerdo para generar señal.
-        """
-        # Obtener mercados BTC activos primero
         btc_markets = self.api.get_btc_markets(limit=30)
         btc_market_ids = {m.get("id") or m.get("condition_id") for m in btc_markets}
 
@@ -187,23 +171,21 @@ class WalletTracker:
                 try:
                     market_id = trade.get("market")
                     outcome = trade.get("outcome")
-                    price = float(trade.get("price", 0))
+                    price = float(trade.get("price", 0) or 0)
                     token_id = trade.get("asset_id")
-                    title = trade.get("title", "").lower()
+                    title = str(trade.get("title", "") or "").lower()
 
                     if not market_id or not outcome or price <= 0:
                         continue
 
-                    # Solo mercados BTC
                     from polymarket_api import BTC_KEYWORDS
-                    is_btc_trade = (
+                    is_btc = (
                         market_id in btc_market_ids or
                         any(kw in title for kw in BTC_KEYWORDS)
                     )
-                    if not is_btc_trade:
+                    if not is_btc:
                         continue
 
-                    # Precios razonables (5%–95%)
                     if price < 0.05 or price > 0.95:
                         continue
 
@@ -218,15 +200,12 @@ class WalletTracker:
 
                         if not market_votes[key]["question"]:
                             market_data = self.api.get_market_by_id(market_id)
-                            market_votes[key]["question"] = market_data.get(
-                                "question", "Mercado BTC desconocido"
-                            )
+                            market_votes[key]["question"] = market_data.get("question", "Mercado BTC")
 
                 except Exception as e:
                     logger.debug(f"Error procesando trade: {e}")
                     continue
 
-        # Filtrar por consenso mínimo
         signals = []
         total_wallets = len(wallets)
 
@@ -248,6 +227,3 @@ class WalletTracker:
         signals.sort(key=lambda x: x["consensus_count"], reverse=True)
         logger.info(f"🎯 Señales BTC con consenso >= {min_consensus}: {len(signals)}")
         return signals
-
-        
-      
