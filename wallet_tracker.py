@@ -35,7 +35,7 @@ class WalletTracker:
         scored_wallets = []
 
         for trader in traders:
-            address = trader.get("proxy_wallet") or trader.get("address")
+            address = trader.get("proxyWallet") or trader.get("proxy_wallet") or trader.get("address")
             if not address:
                 continue
 
