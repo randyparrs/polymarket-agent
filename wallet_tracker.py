@@ -37,36 +37,39 @@ class WalletTracker:
 
     def get_btc5min_signal(self, wallets: List[str], market_condition_id: str, min_consensus: int = 3) -> Dict:
         """
-        Analizar qué están apostando las top wallets en el mercado BTC 5min actual.
-        Retorna la dirección con mayor consenso: Up o Down.
+        Analizar qué están apostando las top wallets en mercados BTC 5min recientes.
+        Busca en los ultimos 50 trades de cada wallet cualquier mercado btc-updown-5m.
         """
         votes = {"Up": [], "Down": []}
 
         for wallet in wallets:
-            trades = self.api.get_wallet_trades(wallet, limit=50)
+            trades = self.api.get_wallet_trades(wallet, limit=100)
 
             for trade in trades:
                 try:
-                    cid = trade.get("conditionId", "")
                     outcome = str(trade.get("outcome", "") or "").strip()
                     title = str(trade.get("title", "") or "").lower()
+                    slug = str(trade.get("slug", "") or "").lower()
+                    event_slug = str(trade.get("eventSlug", "") or "").lower()
                     price = float(trade.get("price", 0) or 0)
 
-                    # Verificar que es el mercado BTC 5min correcto
+                    # Verificar que es un mercado BTC 5min (cualquiera, no solo el actual)
                     is_btc5 = (
-                        cid == market_condition_id or
-                        ("bitcoin" in title and "5" in title and ("up" in title or "down" in title))
+                        "btc-updown-5m" in slug or
+                        "btc-updown-5m" in event_slug or
+                        ("bitcoin" in title and ("up or down" in title) and ("5" in title or "min" in title))
                     )
 
                     if not is_btc5 or price <= 0:
                         continue
 
-                    # Clasificar voto
                     outcome_lower = outcome.lower()
                     if "up" in outcome_lower and wallet not in votes["Up"] and wallet not in votes["Down"]:
                         votes["Up"].append(wallet)
+                        break  # un voto por wallet
                     elif "down" in outcome_lower and wallet not in votes["Up"] and wallet not in votes["Down"]:
                         votes["Down"].append(wallet)
+                        break  # un voto por wallet
 
                 except Exception:
                     continue
