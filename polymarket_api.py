@@ -23,53 +23,47 @@ class PolymarketAPI:
         self._trades_logged = False
 
     def get_current_btc5min_market(self) -> Dict:
-        """Obtener el mercado activo actual de Bitcoin Up or Down 5 Min"""
+        """Obtener el mercado BTC 5min mas cercano al tiempo actual"""
+        from datetime import datetime, timezone
+        import re as _re
 
-        # Buscar en el endpoint de events con slug base
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+
         try:
             response = self.session.get(
                 f"{POLYMARKET_API}/events",
-                params={"active": True, "closed": False, "limit": 20, "slug": "btc-updown-5m"},
+                params={"active": True, "closed": False, "limit": 50, "order": "startDate", "ascending": True},
                 timeout=10
             )
             if response.status_code == 200:
                 data = response.json()
                 events = data if isinstance(data, list) else data.get("data", [])
-                logger.info(f"🔎 Events con slug btc-updown-5m: {len(events)}")
-                for event in events:
-                    markets = event.get("markets", [])
-                    if markets:
-                        logger.info(f"✅ Encontrado via events: {event.get('title', 'N/A')}")
-                        return markets[0]
-        except Exception as e:
-            logger.debug(f"Error events slug: {e}")
 
-        # Buscar todos los events recientes y filtrar
-        try:
-            response = self.session.get(
-                f"{POLYMARKET_API}/events",
-                params={"active": True, "closed": False, "limit": 50, "order": "startDate", "ascending": False},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                events = data if isinstance(data, list) else data.get("data", [])
-                logger.info(f"🔎 Total events activos: {len(events)}")
-                for event in events[:10]:
-                    logger.info(f"  → {event.get('slug','')} | {event.get('title','')[:50]}")
+                best_event = None
+                best_diff = float("inf")
 
                 for event in events:
                     slug = str(event.get("slug", "") or "").lower()
-                    title = str(event.get("title", "") or "").lower()
-                    if "btc-updown" in slug or "btc-updown" in title or ("bitcoin" in title and "5" in title and ("up" in title or "down" in title)):
-                        markets = event.get("markets", [])
-                        if markets:
-                            logger.info(f"✅ BTC 5min encontrado: {event.get('title')}")
-                            return markets[0]
-        except Exception as e:
-            logger.error(f"Error buscando events BTC 5min: {e}")
+                    if "btc-updown-5m" not in slug:
+                        continue
+                    m = _re.search(r"btc-updown-5m-([0-9]+)", slug)
+                    if m:
+                        event_ts = int(m.group(1))
+                        diff = abs(event_ts - now_ts)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_event = event
 
-        logger.warning("⚠️ No se encontró mercado BTC 5min activo")
+                if best_event:
+                    markets = best_event.get("markets", [])
+                    if markets:
+                        logger.info(f"✅ BTC 5min activo: {best_event.get('title')} (diff: {best_diff}s)")
+                        return markets[0]
+
+        except Exception as e:
+            logger.error(f"Error buscando BTC 5min: {e}")
+
+        logger.warning("⚠️ No se encontro mercado BTC 5min activo")
         return {}
 
     def get_recent_trades_for_market(self, condition_id: str, limit: int = 100) -> List[Dict]:
@@ -125,5 +119,4 @@ class PolymarketAPI:
             logger.debug(f"Error trades wallet {wallet_address[:10]}: {e}")
             return []
 
-           
       
