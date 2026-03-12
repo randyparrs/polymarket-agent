@@ -21,9 +21,9 @@ def main():
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID"),
         "simulation_mode": os.getenv("SIMULATION_MODE", "true").lower() == "true",
         "max_bet_usdc": float(os.getenv("MAX_BET_USDC", "1.0")),
-        "min_consensus": int(os.getenv("MIN_CONSENSUS_WALLETS", "4")),
-        "top_wallets_count": int(os.getenv("TOP_WALLETS_COUNT", "10")),
-        "check_interval_seconds": int(os.getenv("CHECK_INTERVAL_SECONDS", "300")),
+        "min_consensus": int(os.getenv("MIN_CONSENSUS_WALLETS", "3")),
+        "top_wallets_count": int(os.getenv("TOP_WALLETS_COUNT", "15")),
+        "check_interval_seconds": int(os.getenv("CHECK_INTERVAL_SECONDS", "60")),
     }
 
     if not config["private_key"] and not config["simulation_mode"]:
