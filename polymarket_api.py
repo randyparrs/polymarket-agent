@@ -87,15 +87,16 @@ class PolymarketAPI:
             return []
 
     def get_wallet_trades(self, wallet_address: str, limit: int = 200) -> List[Dict]:
-        """Obtener historial de trades de una wallet"""
+        """Obtener historial de trades de una wallet usando Data API público (sin auth)"""
         try:
             response = self.session.get(
-                f"{CLOB_API}/trades",
-                params={"maker_address": wallet_address.lower(), "limit": limit},
+                f"{DATA_API}/trades",
+                params={"user": wallet_address.lower(), "limit": limit},
                 timeout=10
             )
             response.raise_for_status()
-            return response.json().get("data", [])
+            data = response.json()
+            return data if isinstance(data, list) else data.get("data", [])
         except Exception as e:
             logger.error(f"Error obteniendo trades de wallet {wallet_address}: {e}")
             return []
@@ -154,4 +155,5 @@ class PolymarketAPI:
             logger.error(f"Error obteniendo mercado {market_id}: {e}")
             return {}
 
-        
+    
+       
