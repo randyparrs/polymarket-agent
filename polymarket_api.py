@@ -70,6 +70,11 @@ class PolymarketAPI:
             data = response.json()
             markets = data if isinstance(data, list) else data.get("data", [])
 
+            # Log primeros 5 mercados para ver estructura real
+            logger.info(f"🔎 Total mercados activos: {len(markets)}")
+            for m in markets[:5]:
+                logger.info(f"  → slug:{m.get('slug','')} | question:{m.get('question','')[:50]}")
+
             for market in markets:
                 slug = str(market.get("slug", "") or "").lower()
                 question = str(market.get("question", "") or "").lower()
