@@ -32,7 +32,7 @@ class PolymarketAPI:
         try:
             response = self.session.get(
                 f"{POLYMARKET_API}/events",
-                params={"active": True, "closed": False, "limit": 50, "order": "startDate", "ascending": True},
+                params={"active": True, "closed": False, "limit": 200, "order": "startDate", "ascending": False},
                 timeout=10
             )
             if response.status_code == 200:
