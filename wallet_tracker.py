@@ -153,9 +153,13 @@ class WalletTracker:
     def _empty_stats(self) -> Dict:
         return {"roi": 0, "win_rate": 0, "btc_trades": 0, "total_trades": 0, "profit": 0}
 
-    def get_consensus_signals(self, wallets: List[str], min_consensus: int = 5) -> List[Dict]:
+    def get_consensus_signals(self, wallets: List[str], min_consensus: int = 3) -> List[Dict]:
         btc_markets = self.api.get_btc_markets(limit=30)
-        btc_market_ids = {m.get("id") or m.get("condition_id") for m in btc_markets}
+        btc_market_ids = {
+            m.get("conditionId") or m.get("id") or m.get("condition_id")
+            for m in btc_markets
+            if m.get("conditionId") or m.get("id") or m.get("condition_id")
+        }
 
         logger.info(f"🔶 Monitoreando {len(btc_market_ids)} mercados BTC activos")
 
@@ -169,10 +173,11 @@ class WalletTracker:
 
             for trade in trades:
                 try:
-                    market_id = trade.get("market")
+                    # El campo correcto es conditionId según los logs
+                    market_id = trade.get("conditionId") or trade.get("market")
                     outcome = trade.get("outcome")
                     price = float(trade.get("price", 0) or 0)
-                    token_id = trade.get("asset_id")
+                    token_id = trade.get("asset")  # campo correcto es "asset"
                     title = str(trade.get("title", "") or "").lower()
 
                     if not market_id or not outcome or price <= 0:
