@@ -25,74 +25,49 @@ class PolymarketAPI:
     def get_current_btc5min_market(self) -> Dict:
         """Obtener el mercado activo actual de Bitcoin Up or Down 5 Min"""
 
-        # 1. Buscar por eventSlug en Data API (el slug cambia cada 5 min con timestamp)
-        try:
-            response = self.session.get(
-                f"{DATA_API}/markets",
-                params={"event_slug": "btc-updown-5m", "active": True, "limit": 5},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                markets = data if isinstance(data, list) else data.get("data", [])
-                if markets:
-                    logger.info(f"✅ Mercado BTC 5min: {markets[0].get('question', 'N/A')}")
-                    return markets[0]
-        except Exception:
-            pass
-
-        # 2. Buscar en gamma API con slug parcial
+        # Buscar en el endpoint de events con slug base
         try:
             response = self.session.get(
                 f"{POLYMARKET_API}/events",
-                params={"slug": "btc-updown-5m", "active": True, "limit": 5},
+                params={"active": True, "closed": False, "limit": 20, "slug": "btc-updown-5m"},
                 timeout=10
             )
             if response.status_code == 200:
                 data = response.json()
                 events = data if isinstance(data, list) else data.get("data", [])
+                logger.info(f"🔎 Events con slug btc-updown-5m: {len(events)}")
                 for event in events:
                     markets = event.get("markets", [])
                     if markets:
-                        logger.info(f"✅ Mercado BTC 5min vía event: {markets[0].get('question', 'N/A')}")
+                        logger.info(f"✅ Encontrado via events: {event.get('title', 'N/A')}")
                         return markets[0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error events slug: {e}")
 
-        # 3. Buscar todos los mercados activos y filtrar por slug/title
+        # Buscar todos los events recientes y filtrar
         try:
             response = self.session.get(
-                f"{POLYMARKET_API}/markets",
-                params={"active": True, "closed": False, "limit": 100, "order": "volume24hr", "ascending": False},
+                f"{POLYMARKET_API}/events",
+                params={"active": True, "closed": False, "limit": 50, "order": "startDate", "ascending": False},
                 timeout=10
             )
-            response.raise_for_status()
-            data = response.json()
-            markets = data if isinstance(data, list) else data.get("data", [])
+            if response.status_code == 200:
+                data = response.json()
+                events = data if isinstance(data, list) else data.get("data", [])
+                logger.info(f"🔎 Total events activos: {len(events)}")
+                for event in events[:10]:
+                    logger.info(f"  → {event.get('slug','')} | {event.get('title','')[:50]}")
 
-            # Log primeros 5 mercados para ver estructura real
-            logger.info(f"🔎 Total mercados activos: {len(markets)}")
-            for m in markets[:5]:
-                logger.info(f"  → slug:{m.get('slug','')} | question:{m.get('question','')[:50]}")
-
-            for market in markets:
-                slug = str(market.get("slug", "") or "").lower()
-                question = str(market.get("question", "") or "").lower()
-                event_slug = str(market.get("groupItemTitle", "") or market.get("eventSlug", "") or "").lower()
-
-                is_btc5 = (
-                    "btc-updown-5m" in slug or
-                    "btc-updown-5m" in event_slug or
-                    ("bitcoin" in question and "5 min" in question) or
-                    ("btc" in question and "5 min" in question)
-                )
-
-                if is_btc5:
-                    logger.info(f"✅ Mercado BTC 5min encontrado: {market.get('question')}")
-                    return market
-
+                for event in events:
+                    slug = str(event.get("slug", "") or "").lower()
+                    title = str(event.get("title", "") or "").lower()
+                    if "btc-updown" in slug or "btc-updown" in title or ("bitcoin" in title and "5" in title and ("up" in title or "down" in title)):
+                        markets = event.get("markets", [])
+                        if markets:
+                            logger.info(f"✅ BTC 5min encontrado: {event.get('title')}")
+                            return markets[0]
         except Exception as e:
-            logger.error(f"Error buscando mercado BTC 5min: {e}")
+            logger.error(f"Error buscando events BTC 5min: {e}")
 
         logger.warning("⚠️ No se encontró mercado BTC 5min activo")
         return {}
@@ -149,3 +124,6 @@ class PolymarketAPI:
         except Exception as e:
             logger.debug(f"Error trades wallet {wallet_address[:10]}: {e}")
             return []
+
+           
+      
