@@ -168,16 +168,17 @@ class WalletTracker:
             "outcome": None, "question": None, "market_id": None
         })
 
+        btc_count = 0
         for wallet in wallets:
             trades = self.api.get_wallet_trades(wallet, limit=100)
+            wallet_btc = 0
 
             for trade in trades:
                 try:
-                    # El campo correcto es conditionId según los logs
                     market_id = trade.get("conditionId") or trade.get("market")
                     outcome = trade.get("outcome")
                     price = float(trade.get("price", 0) or 0)
-                    token_id = trade.get("asset")  # campo correcto es "asset"
+                    token_id = trade.get("asset")
                     title = str(trade.get("title", "") or "").lower()
 
                     if not market_id or not outcome or price <= 0:
@@ -195,6 +196,7 @@ class WalletTracker:
                         continue
 
                     key = f"{market_id}_{outcome}"
+                    wallet_btc += 1
 
                     if wallet not in market_votes[key]["wallets"]:
                         market_votes[key]["wallets"].append(wallet)
@@ -204,12 +206,17 @@ class WalletTracker:
                         market_votes[key]["market_id"] = market_id
 
                         if not market_votes[key]["question"]:
-                            market_data = self.api.get_market_by_id(market_id)
-                            market_votes[key]["question"] = market_data.get("question", "Mercado BTC")
+                            market_votes[key]["question"] = str(trade.get("title", "") or market_id)
 
                 except Exception as e:
                     logger.debug(f"Error procesando trade: {e}")
                     continue
+
+            if wallet_btc > 0:
+                logger.info(f"  🔍 {wallet[:10]}... → {wallet_btc} trades BTC encontrados")
+                btc_count += wallet_btc
+
+        logger.info(f"📊 Total trades BTC detectados: {btc_count} de {len(wallets)} wallets")
 
         signals = []
         total_wallets = len(wallets)
