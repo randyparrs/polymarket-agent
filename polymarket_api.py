@@ -39,6 +39,12 @@ class PolymarketAPI:
                 data = response.json()
                 events = data if isinstance(data, list) else data.get("data", [])
 
+                # Log todos los slugs btc para ver qué hay
+                btc_events = [e for e in events if "btc-updown-5m" in str(e.get("slug","")).lower()]
+                logger.info(f"🔎 Eventos btc-updown-5m encontrados: {len(btc_events)}")
+                for e in btc_events[:5]:
+                    logger.info(f"  → {e.get('slug')} | startDate:{e.get('startDate')} | endDate:{e.get('endDate')}")
+
                 best_event = None
                 best_diff = float("inf")
 
@@ -118,5 +124,3 @@ class PolymarketAPI:
         except Exception as e:
             logger.debug(f"Error trades wallet {wallet_address[:10]}: {e}")
             return []
-
-      
