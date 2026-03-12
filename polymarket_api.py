@@ -21,41 +21,80 @@ class PolymarketAPI:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "polymarket-agent/1.0"})
 
-    def get_btc_markets(self, limit: int = 30) -> List[Dict]:
-        """Obtener solo mercados activos relacionados con BTC"""
-        try:
-            response = self.session.get(
-                f"{POLYMARKET_API}/markets",
-                params={
-                    "active": True,
-                    "closed": False,
-                    "limit": limit,
-                    "order": "volume24hr",
-                    "ascending": False
-                },
-                timeout=10
-            )
-            response.raise_for_status()
-            all_markets = response.json()
+    def get_btc_markets(self, limit: int = 50) -> List[Dict]:
+        """Obtener mercados activos relacionados con BTC"""
+        btc_markets = []
 
-            # Filtrar solo mercados de BTC
-            btc_markets = []
-            for market in all_markets:
-                question = market.get("question", "").lower()
-                tags = [t.lower() for t in market.get("tags", [])]
-                
-                is_btc = any(kw in question for kw in BTC_KEYWORDS)
-                is_btc = is_btc or any(kw in " ".join(tags) for kw in ["bitcoin", "btc"])
-                
-                if is_btc:
-                    btc_markets.append(market)
+        # Intentar búsqueda por tag/keyword en gamma API
+        for search_term in ["bitcoin", "BTC", "Bitcoin"]:
+            try:
+                response = self.session.get(
+                    f"{POLYMARKET_API}/markets",
+                    params={
+                        "active": True,
+                        "closed": False,
+                        "limit": limit,
+                        "order": "volume24hr",
+                        "ascending": False,
+                        "tag": search_term
+                    },
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    markets = data if isinstance(data, list) else data.get("data", data)
+                    if markets:
+                        btc_markets.extend(markets)
+                        break
+            except Exception:
+                continue
 
-            logger.info(f"🔶 {len(btc_markets)} mercados BTC activos encontrados")
-            return btc_markets
+        # Si no encontró por tag, traer todos y filtrar
+        if not btc_markets:
+            try:
+                response = self.session.get(
+                    f"{POLYMARKET_API}/markets",
+                    params={
+                        "active": True,
+                        "closed": False,
+                        "limit": 100,
+                        "order": "volume24hr",
+                        "ascending": False
+                    },
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+                all_markets = data if isinstance(data, list) else data.get("data", [])
 
-        except Exception as e:
-            logger.error(f"Error obteniendo mercados BTC: {e}")
-            return []
+                for market in all_markets:
+                    question = str(market.get("question", "") or "").lower()
+                    title = str(market.get("title", "") or "").lower()
+                    tags = market.get("tags", [])
+                    tag_str = " ".join([str(t).lower() for t in (tags if isinstance(tags, list) else [])]) 
+
+                    is_btc = (
+                        any(kw in question for kw in BTC_KEYWORDS) or
+                        any(kw in title for kw in BTC_KEYWORDS) or
+                        any(kw in tag_str for kw in ["bitcoin", "btc"])
+                    )
+                    if is_btc:
+                        btc_markets.append(market)
+
+            except Exception as e:
+                logger.error(f"Error obteniendo mercados: {e}")
+
+        # Deduplicar
+        seen = set()
+        unique = []
+        for m in btc_markets:
+            mid = m.get("id") or m.get("condition_id") or m.get("market_slug")
+            if mid and mid not in seen:
+                seen.add(mid)
+                unique.append(m)
+
+        logger.info(f"🔶 {len(unique)} mercados BTC activos encontrados")
+        return unique
 
     def get_markets(self, limit: int = 50) -> List[Dict]:
         """Obtener mercados activos generales"""
@@ -87,7 +126,7 @@ class PolymarketAPI:
             return []
 
     def get_wallet_trades(self, wallet_address: str, limit: int = 200) -> List[Dict]:
-        """Obtener historial de trades de una wallet usando Data API público (sin auth)"""
+        """Obtener historial de trades de una wallet usando Data API público"""
         try:
             response = self.session.get(
                 f"{DATA_API}/trades",
@@ -96,9 +135,14 @@ class PolymarketAPI:
             )
             response.raise_for_status()
             data = response.json()
-            return data if isinstance(data, list) else data.get("data", [])
+            result = data if isinstance(data, list) else data.get("data", [])
+            # Log estructura solo la primera vez
+            if result and not hasattr(self, "_trades_logged"):
+                logger.info(f"🔎 Campos de trades: {list(result[0].keys())}")
+                self._trades_logged = True
+            return result
         except Exception as e:
-            logger.error(f"Error obteniendo trades de wallet {wallet_address}: {e}")
+            logger.debug(f"Error trades wallet {wallet_address[:10]}: {e}")
             return []
 
     def get_wallet_btc_trades(self, wallet_address: str, limit: int = 200) -> List[Dict]:
@@ -154,6 +198,3 @@ class PolymarketAPI:
         except Exception as e:
             logger.error(f"Error obteniendo mercado {market_id}: {e}")
             return {}
-
-    
-       
