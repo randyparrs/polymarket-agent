@@ -1,6 +1,5 @@
 import logging
-import requests
-from typing import List, Dict
+from typing import Dict
 from polymarket_api import PolymarketAPI
 from wallet_tracker import WalletTracker
 from telegram_bot import TelegramNotifier
@@ -16,130 +15,114 @@ class PolymarketAgent:
             config.get("telegram_token"),
             config.get("telegram_chat_id")
         )
-        self.active_positions = {}
         self.cycle_count = 0
+        self.last_market_id = None
 
     def run_cycle(self):
         self.cycle_count += 1
         logger.info(f"🔄 Ciclo #{self.cycle_count} iniciado")
 
-        # 1. Obtener top wallets
-        logger.info("📊 Analizando top wallets...")
-        top_wallets = self.tracker.get_top_wallets(self.config["top_wallets_count"])
-        
-        if not top_wallets:
-            logger.warning("⚠️ No se pudieron obtener wallets. Reintentando en el próximo ciclo.")
+        # 1. Obtener el mercado BTC 5min activo ahora mismo
+        market = self.api.get_current_btc5min_market()
+
+        if not market:
+            logger.warning("⚠️ No se encontró mercado BTC 5min activo. Reintentando...")
             return
 
-        logger.info(f"✅ Top {len(top_wallets)} wallets encontradas")
+        condition_id = market.get("conditionId") or market.get("condition_id") or market.get("id")
+        question = market.get("question", "Bitcoin Up or Down - 5 Minutes")
 
-        # 2. Obtener apuestas recientes de esas wallets
-        signals = self.tracker.get_consensus_signals(
+        logger.info(f"🔶 Mercado activo: {question}")
+        logger.info(f"   ID: {condition_id}")
+
+        # Evitar operar en el mismo mercado dos veces
+        if condition_id == self.last_market_id:
+            logger.info("⏭️ Mismo mercado que el ciclo anterior, esperando el siguiente...")
+            return
+
+        # 2. Obtener top wallets
+        top_wallets = self.tracker.get_top_wallets(self.config["top_wallets_count"])
+        if not top_wallets:
+            logger.warning("⚠️ No se pudieron obtener wallets.")
+            return
+
+        # 3. Analizar consenso en este mercado
+        signal = self.tracker.get_btc5min_signal(
             top_wallets,
+            condition_id,
             min_consensus=self.config["min_consensus"]
         )
 
-        if not signals:
-            logger.info("😴 Sin señales de consenso esta ronda.")
+        if not signal:
             return
 
-        logger.info(f"🎯 {len(signals)} señales encontradas")
-
-        # 3. Evaluar y ejecutar
-        for signal in signals:
-            self._process_signal(signal)
-
-    def _process_signal(self, signal: Dict):
-        market_id = signal["market_id"]
-        
-        # Evitar duplicados
-        if market_id in self.active_positions:
-            logger.info(f"⏭️ Ya tenemos posición en {signal['question'][:40]}...")
-            return
-
-        consensus = signal["consensus_count"]
-        outcome = signal["outcome"]
-        price = signal["avg_price"]
-        question = signal["question"]
-
-        # Calcular tamaño de apuesta según consenso
-        bet_size = self._calculate_bet_size(consensus)
-
-        logger.info(f"📌 Señal: {question[:50]}")
-        logger.info(f"   Consenso: {consensus}/10 wallets | Outcome: {outcome} | Precio: {price:.2f}")
-        logger.info(f"   Apuesta calculada: ${bet_size:.2f} USDC")
+        # 4. Ejecutar o simular apuesta
+        self.last_market_id = condition_id
 
         if self.config["simulation_mode"]:
-            self._simulate_bet(signal, bet_size)
+            self._simulate_bet(signal, question, market)
         else:
-            self._execute_bet(signal, bet_size)
+            self._execute_bet(signal, question, market)
 
-    def _calculate_bet_size(self, consensus: int) -> float:
-        max_bet = self.config["max_bet_usdc"]
-        if consensus >= 8:
-            return max_bet
-        elif consensus >= 6:
-            return max_bet * 0.7
-        elif consensus >= 4:
-            return max_bet * 0.4
-        else:
-            return max_bet * 0.2
+    def _simulate_bet(self, signal: Dict, question: str, market: Dict):
+        direction = signal["direction"]
+        bet = self.config["max_bet_usdc"]
 
-    def _simulate_bet(self, signal: Dict, bet_size: float):
         msg = (
-            f"🟡 [SIMULACIÓN] Apuesta detectada\n"
-            f"📋 {signal['question'][:60]}\n"
-            f"✅ Outcome: {signal['outcome']}\n"
-            f"💵 Monto: ${bet_size:.2f} USDC\n"
-            f"📊 Precio: {signal['avg_price']:.2f}\n"
-            f"👥 Consenso: {signal['consensus_count']}/10 wallets\n"
-            f"💰 Ganancia potencial: ${bet_size / signal['avg_price'] - bet_size:.2f}"
+            f"🟡 [SIMULACIÓN] Bitcoin 5 Min\n"
+            f"📋 {question}\n"
+            f"{'🟢' if direction == 'Up' else '🔴'} Dirección: {direction}\n"
+            f"👥 Consenso: {signal['consensus_count']}/{self.config['top_wallets_count']} wallets ({signal['confidence_pct']:.1f}%)\n"
+            f"📊 Up: {signal['up_votes']} | Down: {signal['down_votes']}\n"
+            f"💵 Apuesta simulada: ${bet} USDC"
         )
         logger.info(msg)
         self.notifier.send(msg)
-        self.active_positions[signal["market_id"]] = {
-            "simulated": True,
-            "bet_size": bet_size,
-            "signal": signal
-        }
 
-    def _execute_bet(self, signal: Dict, bet_size: float):
-        # Implementación real con py-clob-client
+    def _execute_bet(self, signal: Dict, question: str, market: Dict):
         try:
             from py_clob_client.client import ClobClient
-            
+
+            direction = signal["direction"]
+            bet = self.config["max_bet_usdc"]
+
+            # Encontrar el token correcto (Up o Down)
+            tokens = market.get("tokens", [])
+            token_id = None
+            for token in tokens:
+                if direction.lower() in str(token.get("outcome", "")).lower():
+                    token_id = token.get("token_id")
+                    break
+
+            if not token_id:
+                logger.error(f"❌ No se encontró token para {direction}")
+                return
+
             client = ClobClient(
                 host="https://clob.polymarket.com",
                 key=self.config["private_key"],
-                chain_id=137  # Polygon
+                chain_id=137
             )
-            
-            # Crear orden
+
             order_args = {
-                "token_id": signal["token_id"],
-                "price": signal["avg_price"],
-                "size": bet_size,
+                "token_id": token_id,
+                "price": 0.52 if direction == "Up" else 0.50,
+                "size": bet,
                 "side": "BUY"
             }
-            
+
             signed_order = client.create_order(order_args)
             response = client.post_order(signed_order)
-            
+
             msg = (
                 f"🟢 [REAL] Apuesta ejecutada\n"
-                f"📋 {signal['question'][:60]}\n"
-                f"✅ Outcome: {signal['outcome']}\n"
-                f"💵 Monto: ${bet_size:.2f} USDC\n"
-                f"🔗 Order ID: {response.get('orderID', 'N/A')}"
+                f"{'🟢' if direction == 'Up' else '🔴'} Bitcoin 5Min: {direction}\n"
+                f"💵 ${bet} USDC\n"
+                f"👥 Consenso: {signal['consensus_count']} wallets\n"
+                f"🔗 Order: {response.get('orderID', 'N/A')}"
             )
             logger.info(msg)
             self.notifier.send(msg)
-            self.active_positions[signal["market_id"]] = {
-                "simulated": False,
-                "bet_size": bet_size,
-                "order_id": response.get("orderID"),
-                "signal": signal
-            }
 
         except Exception as e:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
