@@ -6,10 +6,10 @@ from polymarket_api import PolymarketAPI
 logger = logging.getLogger(__name__)
 
 # ── Filtros de calidad ──────────────────────────────────────────
-MIN_TOTAL_TRADES    = 30     # Mínimo trades totales (actividad general)
-MIN_BTC_TRADES      = 5      # Mínimo trades en mercados BTC
-MIN_ROI_PERCENT     = 40     # ROI mínimo sobre trades BTC (%)
-MIN_WIN_RATE        = 0.55   # Win rate mínimo en BTC (55%)
+MIN_TOTAL_TRADES    = 10     # Mínimo trades totales
+MIN_BTC_TRADES      = 2      # Mínimo trades en mercados BTC
+MIN_ROI_PERCENT     = 10     # ROI mínimo (%)
+MIN_WIN_RATE        = 0.50   # Win rate mínimo (50%)
 TOP_WALLETS_TARGET  = 15     # Cuántas wallets queremos al final
 # ───────────────────────────────────────────────────────────────
 
@@ -242,3 +242,7 @@ class WalletTracker:
         signals.sort(key=lambda x: x["consensus_count"], reverse=True)
         logger.info(f"🎯 Señales BTC con consenso >= {min_consensus}: {len(signals)}")
         return signals
+
+
+      
+    
