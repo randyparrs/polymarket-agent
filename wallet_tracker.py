@@ -1,4 +1,4 @@
-mport logging
+import logging
 from typing import List, Dict
 from collections import defaultdict
 from polymarket_api import PolymarketAPI
