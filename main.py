@@ -17,6 +17,7 @@ def main():
     # Configuración desde variables de entorno
     config = {
         "private_key": os.getenv("WALLET_PRIVATE_KEY"),
+        "proxy_wallet": os.getenv("POLYMARKET_PROXY_WALLET", ""),
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID"),
         "simulation_mode": os.getenv("SIMULATION_MODE", "true").lower() == "true",
