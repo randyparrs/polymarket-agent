@@ -151,7 +151,7 @@ class PolymarketAgent:
                 self.notifier.send(f"❌ Token no encontrado para {direction}")
                 return
 
-            # Configurar cliente
+            # Configurar cliente con credenciales
             client = ClobClient(
                 host="https://clob.polymarket.com",
                 key=private_key,
@@ -159,6 +159,31 @@ class PolymarketAgent:
                 signature_type=1,
                 funder=proxy_wallet if proxy_wallet else None
             )
+
+            # Generar o usar API credentials
+            api_key = self.config.get("polymarket_api_key")
+            api_secret = self.config.get("polymarket_api_secret")
+            api_passphrase = self.config.get("polymarket_api_passphrase")
+
+            if api_key and api_secret and api_passphrase:
+                from py_clob_client.clob_types import ApiCreds
+                creds = ApiCreds(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    api_passphrase=api_passphrase
+                )
+                client.set_api_creds(creds)
+            else:
+                # Generar credenciales automáticamente
+                logger.info("🔑 Generando API credentials...")
+                creds = client.create_or_derive_api_creds()
+                client.set_api_creds(creds)
+                logger.info(f"✅ API Key generada: {creds.api_key[:10]}...")
+                # Guardar para referencia
+                logger.info(f"💾 Guarda estas credenciales en Railway:")
+                logger.info(f"   POLYMARKET_API_KEY={creds.api_key}")
+                logger.info(f"   POLYMARKET_API_SECRET={creds.api_secret}")
+                logger.info(f"   POLYMARKET_API_PASSPHRASE={creds.api_passphrase}")
 
             # Crear orden con OrderArgs
             order_args = OrderArgs(
@@ -188,3 +213,5 @@ class PolymarketAgent:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
             logger.error(error_msg)
             self.notifier.send(error_msg)
+
+          
