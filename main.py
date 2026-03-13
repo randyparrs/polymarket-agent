@@ -18,6 +18,9 @@ def main():
     config = {
         "private_key": os.getenv("WALLET_PRIVATE_KEY"),
         "proxy_wallet": os.getenv("POLYMARKET_PROXY_WALLET", ""),
+        "polymarket_api_key": os.getenv("POLYMARKET_API_KEY", ""),
+        "polymarket_api_secret": os.getenv("POLYMARKET_API_SECRET", ""),
+        "polymarket_api_passphrase": os.getenv("POLYMARKET_API_PASSPHRASE", ""),
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID"),
         "simulation_mode": os.getenv("SIMULATION_MODE", "true").lower() == "true",
