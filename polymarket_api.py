@@ -45,26 +45,44 @@ class PolymarketAPI:
                 for e in btc_events[:5]:
                     logger.info(f"  → {e.get('slug')} | startDate:{e.get('startDate')} | endDate:{e.get('endDate')}")
 
-                best_event = None
-                best_diff = float("inf")
+                # Buscar el mercado con startDate mas reciente que ya haya comenzado
+                # o el que esta a punto de comenzar (proximo)
+                started = []
+                upcoming = []
 
                 for event in events:
                     slug = str(event.get("slug", "") or "").lower()
                     if "btc-updown-5m" not in slug:
                         continue
-                    m = _re.search(r"btc-updown-5m-([0-9]+)", slug)
-                    if m:
-                        event_ts = int(m.group(1))
-                        diff = abs(event_ts - now_ts)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best_event = event
+                    start_str = event.get("startDate", "") or ""
+                    try:
+                        from datetime import datetime, timezone
+                        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                        start_ts = int(start_dt.timestamp())
+                        markets = event.get("markets", [])
+                        if not markets:
+                            continue
+                        if start_ts <= now_ts:
+                            started.append((start_ts, event))
+                        else:
+                            upcoming.append((start_ts, event))
+                    except Exception:
+                        continue
 
-                if best_event:
-                    markets = best_event.get("markets", [])
-                    if markets:
-                        logger.info(f"✅ BTC 5min activo: {best_event.get('title')} (diff: {best_diff}s)")
-                        return markets[0]
+                # Preferir el mas reciente que ya empezo
+                if started:
+                    started.sort(key=lambda x: x[0], reverse=True)
+                    best_event = started[0][1]
+                    logger.info(f"✅ BTC 5min EN CURSO: {best_event.get('title')}")
+                    return best_event.get("markets", [])[0]
+
+                # Si no hay ninguno activo, usar el proximo
+                if upcoming:
+                    upcoming.sort(key=lambda x: x[0])
+                    best_event = upcoming[0][1]
+                    secs = upcoming[0][0] - now_ts
+                    logger.info(f"⏳ BTC 5min PROXIMO en {secs}s: {best_event.get('title')}")
+                    return best_event.get("markets", [])[0]
 
         except Exception as e:
             logger.error(f"Error buscando BTC 5min: {e}")
