@@ -53,8 +53,10 @@ class WalletTracker:
                     event_slug = str(trade.get("eventSlug", "") or "").lower()
                     price = float(trade.get("price", 0) or 0)
 
-                    # Verificar que es un mercado BTC 5min (cualquiera, no solo el actual)
+                    cid = trade.get("conditionId", "")
+                    # Verificar que es el mercado correcto o cualquier BTC 5min
                     is_btc5 = (
+                        cid == market_condition_id or
                         "btc-updown-5m" in slug or
                         "btc-updown-5m" in event_slug or
                         ("bitcoin" in title and ("up or down" in title) and ("5" in title or "min" in title))
@@ -106,4 +108,3 @@ class WalletTracker:
             "down_votes": down_count,
             "total_voters": total
         }
-
