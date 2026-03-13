@@ -35,7 +35,7 @@ class WalletTracker:
         logger.info(f"✅ {len(wallets)} top wallets obtenidas del leaderboard")
         return wallets
 
-    def get_btc5min_signal(self, wallets: List[str], market_condition_id: str, min_consensus: int = 3) -> Dict:
+    def get_btc5min_signal(self, wallets: List[str], market_condition_id: str, min_consensus: int = 2) -> Dict:
         """
         Analizar qué están apostando las top wallets en mercados BTC 5min recientes.
         Busca en los ultimos 50 trades de cada wallet cualquier mercado btc-updown-5m.
@@ -86,7 +86,10 @@ class WalletTracker:
             return {}
 
         # Determinar dirección ganadora
-        if up_count > down_count and up_count >= min_consensus:
+        if up_count == down_count:
+            logger.info("😴 Empate exacto — sin señal.")
+            return {}
+        elif up_count > down_count and up_count >= min_consensus:
             direction = "Up"
             consensus = up_count
         elif down_count > up_count and down_count >= min_consensus:
