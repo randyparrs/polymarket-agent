@@ -128,6 +128,33 @@ class PolymarketAPI:
                 logger.error(f"Error leaderboard window={window}: {e}")
         return []
 
+    def get_active_traders_in_market(self, condition_id: str, limit: int = 100) -> list:
+        """Obtener wallets que han apostado en este mercado especifico"""
+        try:
+            response = self.session.get(
+                f"{DATA_API}/trades",
+                params={"conditionId": condition_id, "limit": limit},
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            trades = data if isinstance(data, list) else data.get("data", [])
+
+            wallets = []
+            seen = set()
+            for trade in trades:
+                wallet = trade.get("proxyWallet") or trade.get("user")
+                if wallet and wallet not in seen:
+                    seen.add(wallet)
+                    wallets.append(wallet)
+
+            logger.info(f"👥 Traders en mercado {condition_id[:10]}...: {len(wallets)}")
+            return wallets
+        except Exception as e:
+            logger.debug(f"Error obteniendo traders del mercado: {e}")
+            return []
+
+
     def get_wallet_trades(self, wallet_address: str, limit: int = 50) -> List[Dict]:
         """Obtener trades recientes de una wallet"""
         try:
