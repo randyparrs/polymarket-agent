@@ -145,15 +145,12 @@ class PolymarketAgent:
             response = client.post_order(signed_order)
 
             order_id = response.get("orderID") or response.get("id", "N/A")
+            emoji = '🟢' if direction == 'Up' else '🔴'
             msg = (
-                f"🟢 [REAL] Apuesta ejecutada
-"
-                f"{'🟢' if direction == 'Up' else '🔴'} Bitcoin 5Min: {direction}
-"
-                f"💵 ${bet} USDC @ {price}
-"
-                f"👥 Consenso: {signal['consensus_count']} wallets
-"
+                f"🟢 [REAL] Apuesta ejecutada\n"
+                f"{emoji} Bitcoin 5Min: {direction}\n"
+                f"💵 ${bet} USDC @ {price}\n"
+                f"👥 Consenso: {signal['consensus_count']} wallets\n"
                 f"🔗 Order ID: {order_id}"
             )
             logger.info(msg)
