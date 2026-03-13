@@ -91,44 +91,70 @@ class PolymarketAgent:
     def _execute_bet(self, signal: Dict, question: str, market: Dict):
         try:
             from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import ApiCreds
 
             direction = signal["direction"]
             bet = self.config["max_bet_usdc"]
+            private_key = self.config["private_key"]
+            proxy_wallet = self.config.get("proxy_wallet", "")
 
             # Encontrar el token correcto (Up o Down)
             tokens = market.get("tokens", [])
             token_id = None
+            price = 0.50
+
             for token in tokens:
-                if direction.lower() in str(token.get("outcome", "")).lower():
-                    token_id = token.get("token_id")
+                outcome = str(token.get("outcome", "") or "").lower()
+                if direction.lower() in outcome:
+                    token_id = token.get("token_id") or token.get("tokenId")
+                    price = float(token.get("price", 0.50) or 0.50)
                     break
 
             if not token_id:
+                # Intentar con outcomeIndex
+                outcomes = market.get("outcomes", ["Up", "Down"])
+                idx = 0 if direction == "Up" else 1
+                tokens_list = market.get("clobTokenIds", [])
+                if tokens_list and idx < len(tokens_list):
+                    token_id = tokens_list[idx]
+
+            if not token_id:
                 logger.error(f"❌ No se encontró token para {direction}")
+                self.notifier.send(f"❌ No se encontró token para {direction} en {question}")
                 return
 
+            # Configurar cliente con proxy wallet
             client = ClobClient(
                 host="https://clob.polymarket.com",
-                key=self.config["private_key"],
-                chain_id=137
+                key=private_key,
+                chain_id=137,
+                signature_type=1,  # EOA firma por proxy
+                funder=proxy_wallet if proxy_wallet else None
             )
 
+            # Crear y enviar orden
             order_args = {
                 "token_id": token_id,
-                "price": 0.52 if direction == "Up" else 0.50,
+                "price": round(price, 2),
                 "size": bet,
                 "side": "BUY"
             }
 
+            logger.info(f"📤 Enviando orden: {order_args}")
             signed_order = client.create_order(order_args)
             response = client.post_order(signed_order)
 
+            order_id = response.get("orderID") or response.get("id", "N/A")
             msg = (
-                f"🟢 [REAL] Apuesta ejecutada\n"
-                f"{'🟢' if direction == 'Up' else '🔴'} Bitcoin 5Min: {direction}\n"
-                f"💵 ${bet} USDC\n"
-                f"👥 Consenso: {signal['consensus_count']} wallets\n"
-                f"🔗 Order: {response.get('orderID', 'N/A')}"
+                f"🟢 [REAL] Apuesta ejecutada
+"
+                f"{'🟢' if direction == 'Up' else '🔴'} Bitcoin 5Min: {direction}
+"
+                f"💵 ${bet} USDC @ {price}
+"
+                f"👥 Consenso: {signal['consensus_count']} wallets
+"
+                f"🔗 Order ID: {order_id}"
             )
             logger.info(msg)
             self.notifier.send(msg)
