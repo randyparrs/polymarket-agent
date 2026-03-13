@@ -151,9 +151,36 @@ class PolymarketAgent:
                 self.notifier.send(f"❌ Token no encontrado para {direction}")
                 return
 
-            # Configurar cliente con credenciales
+            # Forzar proxy a nivel de sistema
             import os as _os
             proxy = _os.getenv("HTTPS_PROXY") or _os.getenv("HTTP_PROXY")
+            if proxy:
+                _os.environ["HTTPS_PROXY"] = proxy
+                _os.environ["HTTP_PROXY"] = proxy
+                _os.environ["https_proxy"] = proxy
+                _os.environ["http_proxy"] = proxy
+                logger.info(f"🌐 Proxy activo: {proxy[:30]}...")
+
+                # Parchear httpx si es el cliente que usa py_clob_client
+                try:
+                    import httpx as _httpx
+                    _original_client_init = _httpx.Client.__init__
+                    def _patched_init(self_inner, *args, **kwargs):
+                        if "proxies" not in kwargs:
+                            kwargs["proxies"] = proxy
+                        _original_client_init(self_inner, *args, **kwargs)
+                    _httpx.Client.__init__ = _patched_init
+                except ImportError:
+                    pass
+
+                # Parchear requests también
+                import requests as _req
+                _original_send = _req.Session.send
+                def _proxied_send(self_inner, *args, **kwargs):
+                    if not self_inner.proxies:
+                        self_inner.proxies = {"https": proxy, "http": proxy}
+                    return _original_send(self_inner, *args, **kwargs)
+                _req.Session.send = _proxied_send
 
             client = ClobClient(
                 host="https://clob.polymarket.com",
@@ -162,13 +189,6 @@ class PolymarketAgent:
                 signature_type=1,
                 funder=proxy_wallet if proxy_wallet else None
             )
-
-            # Aplicar proxy si está configurado
-            if proxy:
-                import requests as _req
-                client.session = _req.Session()
-                client.session.proxies = {"https": proxy, "http": proxy}
-                logger.info(f"🌐 Usando proxy: {proxy[:20]}...")
 
             # Generar o usar API credentials
             api_key = self.config.get("polymarket_api_key")
@@ -224,4 +244,5 @@ class PolymarketAgent:
             logger.error(error_msg)
             self.notifier.send(error_msg)
 
-  
+
+       
