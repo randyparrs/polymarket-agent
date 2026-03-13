@@ -152,6 +152,9 @@ class PolymarketAgent:
                 return
 
             # Configurar cliente con credenciales
+            import os as _os
+            proxy = _os.getenv("HTTPS_PROXY") or _os.getenv("HTTP_PROXY")
+
             client = ClobClient(
                 host="https://clob.polymarket.com",
                 key=private_key,
@@ -159,6 +162,13 @@ class PolymarketAgent:
                 signature_type=1,
                 funder=proxy_wallet if proxy_wallet else None
             )
+
+            # Aplicar proxy si está configurado
+            if proxy:
+                import requests as _req
+                client.session = _req.Session()
+                client.session.proxies = {"https": proxy, "http": proxy}
+                logger.info(f"🌐 Usando proxy: {proxy[:20]}...")
 
             # Generar o usar API credentials
             api_key = self.config.get("polymarket_api_key")
@@ -214,4 +224,4 @@ class PolymarketAgent:
             logger.error(error_msg)
             self.notifier.send(error_msg)
 
-          
+  
