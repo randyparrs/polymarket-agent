@@ -46,9 +46,18 @@ class PolymarketAgent:
             logger.warning("⚠️ No se pudieron obtener wallets.")
             return
 
-        # 3. Analizar consenso en este mercado
+        # 3. Obtener traders activos en este mercado directamente
+        active_traders = self.api.get_active_traders_in_market(condition_id, limit=100)
+        if active_traders:
+            logger.info(f"👥 {len(active_traders)} traders activos en este mercado")
+            # Combinar con top wallets, priorizando los activos en el mercado
+            combined = list(dict.fromkeys(active_traders + top_wallets))[:30]
+        else:
+            combined = top_wallets
+
+        # 4. Analizar consenso en este mercado
         signal = self.tracker.get_btc5min_signal(
-            top_wallets,
+            combined,
             condition_id,
             min_consensus=self.config["min_consensus"]
         )
