@@ -91,56 +91,84 @@ class PolymarketAgent:
     def _execute_bet(self, signal: Dict, question: str, market: Dict):
         try:
             from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client.clob_types import OrderArgs, OrderType
 
             direction = signal["direction"]
             bet = self.config["max_bet_usdc"]
             private_key = self.config["private_key"]
             proxy_wallet = self.config.get("proxy_wallet", "")
 
-            # Encontrar el token correcto (Up o Down)
-            tokens = market.get("tokens", [])
+            # Log estructura del mercado para debugging
+            logger.info(f"🔎 Claves del mercado: {list(market.keys())}")
+
+            # Buscar token_id correcto
             token_id = None
             price = 0.50
 
+            # Opción 1: campo "tokens"
+            tokens = market.get("tokens", [])
             for token in tokens:
                 outcome = str(token.get("outcome", "") or "").lower()
                 if direction.lower() in outcome:
-                    token_id = token.get("token_id") or token.get("tokenId")
+                    token_id = str(token.get("token_id") or token.get("tokenId") or "").strip('"')
                     price = float(token.get("price", 0.50) or 0.50)
                     break
 
+            # Opción 2: campo "clobTokenIds"
             if not token_id:
-                # Intentar con outcomeIndex
-                outcomes = market.get("outcomes", ["Up", "Down"])
-                idx = 0 if direction == "Up" else 1
-                tokens_list = market.get("clobTokenIds", [])
-                if tokens_list and idx < len(tokens_list):
-                    token_id = tokens_list[idx]
+                clob_ids = market.get("clobTokenIds", [])
+                if isinstance(clob_ids, list) and len(clob_ids) >= 2:
+                    idx = 0 if direction == "Up" else 1
+                    token_id = str(clob_ids[idx]).strip('"')
 
+            # Opción 3: campo "outcomePrices" + "clobTokenIds"
             if not token_id:
-                logger.error(f"❌ No se encontró token para {direction}")
-                self.notifier.send(f"❌ No se encontró token para {direction} en {question}")
+                outcomes = market.get("outcomes", "[]")
+                if isinstance(outcomes, str):
+                    import json
+                    try:
+                        outcomes = json.loads(outcomes)
+                    except Exception:
+                        outcomes = []
+                for i, o in enumerate(outcomes):
+                    if direction.lower() in str(o).lower():
+                        clob_ids = market.get("clobTokenIds", [])
+                        if isinstance(clob_ids, str):
+                            import json
+                            try:
+                                clob_ids = json.loads(clob_ids)
+                            except Exception:
+                                clob_ids = []
+                        if i < len(clob_ids):
+                            token_id = str(clob_ids[i]).strip('"')
+                        break
+
+            logger.info(f"🎯 Token ID encontrado: {token_id} | Precio: {price}")
+
+            if not token_id or token_id in ['', '"', "'"]:
+                logger.error(f"❌ No se encontró token válido para {direction}")
+                logger.error(f"❌ Estructura mercado: {market}")
+                self.notifier.send(f"❌ Token no encontrado para {direction}")
                 return
 
-            # Configurar cliente con proxy wallet
+            # Configurar cliente
             client = ClobClient(
                 host="https://clob.polymarket.com",
                 key=private_key,
                 chain_id=137,
-                signature_type=1,  # EOA firma por proxy
+                signature_type=1,
                 funder=proxy_wallet if proxy_wallet else None
             )
 
-            # Crear y enviar orden
-            order_args = {
-                "token_id": token_id,
-                "price": round(price, 2),
-                "size": bet,
-                "side": "BUY"
-            }
+            # Crear orden con OrderArgs
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=round(price, 2),
+                size=bet,
+                side="BUY"
+            )
 
-            logger.info(f"📤 Enviando orden: {order_args}")
+            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet}")
             signed_order = client.create_order(order_args)
             response = client.post_order(signed_order)
 
