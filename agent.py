@@ -22,7 +22,6 @@ class PolymarketAgent:
         self.cycle_count += 1
         logger.info(f"🔄 Ciclo #{self.cycle_count} iniciado")
 
-        # 1. Obtener el mercado BTC 5min activo ahora mismo
         market = self.api.get_current_btc5min_market()
 
         if not market:
@@ -35,27 +34,22 @@ class PolymarketAgent:
         logger.info(f"🔶 Mercado activo: {question}")
         logger.info(f"   ID: {condition_id}")
 
-        # Evitar operar en el mismo mercado dos veces
         if condition_id == self.last_market_id:
             logger.info("⏭️ Mismo mercado que el ciclo anterior, esperando el siguiente...")
             return
 
-        # 2. Obtener top wallets
         top_wallets = self.tracker.get_top_wallets(self.config["top_wallets_count"])
         if not top_wallets:
             logger.warning("⚠️ No se pudieron obtener wallets.")
             return
 
-        # 3. Obtener traders activos en este mercado directamente
         active_traders = self.api.get_active_traders_in_market(condition_id, limit=100)
         if active_traders:
             logger.info(f"👥 {len(active_traders)} traders activos en este mercado")
-            # Combinar con top wallets, priorizando los activos en el mercado
             combined = list(dict.fromkeys(active_traders + top_wallets))[:30]
         else:
             combined = top_wallets
 
-        # 4. Analizar consenso en este mercado
         signal = self.tracker.get_btc5min_signal(
             combined,
             condition_id,
@@ -65,7 +59,6 @@ class PolymarketAgent:
         if not signal:
             return
 
-        # 4. Ejecutar o simular apuesta
         self.last_market_id = condition_id
 
         if self.config["simulation_mode"]:
@@ -76,7 +69,6 @@ class PolymarketAgent:
     def _simulate_bet(self, signal: Dict, question: str, market: Dict):
         direction = signal["direction"]
         bet = self.config["max_bet_usdc"]
-
         msg = (
             f"🟡 [SIMULACIÓN] Bitcoin 5 Min\n"
             f"📋 {question}\n"
@@ -91,15 +83,12 @@ class PolymarketAgent:
     def _execute_bet(self, signal: Dict, question: str, market: Dict):
         try:
             from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import OrderArgs, OrderType
+            from py_clob_client.clob_types import OrderArgs
 
             direction = signal["direction"]
             bet = self.config["max_bet_usdc"]
             private_key = self.config["private_key"]
             proxy_wallet = self.config.get("proxy_wallet", "")
-
-            # Log estructura del mercado para debugging
-            logger.info(f"🔎 Claves del mercado: {list(market.keys())}")
 
             # Buscar token_id correcto
             token_id = None
@@ -121,7 +110,7 @@ class PolymarketAgent:
                     idx = 0 if direction == "Up" else 1
                     token_id = str(clob_ids[idx]).strip('"')
 
-            # Opción 3: campo "outcomePrices" + "clobTokenIds"
+            # Opción 3: outcomes + clobTokenIds
             if not token_id:
                 outcomes = market.get("outcomes", "[]")
                 if isinstance(outcomes, str):
@@ -147,40 +136,8 @@ class PolymarketAgent:
 
             if not token_id or token_id in ['', '"', "'"]:
                 logger.error(f"❌ No se encontró token válido para {direction}")
-                logger.error(f"❌ Estructura mercado: {market}")
                 self.notifier.send(f"❌ Token no encontrado para {direction}")
                 return
-
-            # Forzar proxy a nivel de sistema
-            import os as _os
-            proxy = _os.getenv("HTTPS_PROXY") or _os.getenv("HTTP_PROXY")
-            if proxy:
-                _os.environ["HTTPS_PROXY"] = proxy
-                _os.environ["HTTP_PROXY"] = proxy
-                _os.environ["https_proxy"] = proxy
-                _os.environ["http_proxy"] = proxy
-                logger.info(f"🌐 Proxy activo: {proxy[:30]}...")
-
-                # Parchear httpx si es el cliente que usa py_clob_client
-                try:
-                    import httpx as _httpx
-                    _original_client_init = _httpx.Client.__init__
-                    def _patched_init(self_inner, *args, **kwargs):
-                        if "proxies" not in kwargs:
-                            kwargs["proxies"] = proxy
-                        _original_client_init(self_inner, *args, **kwargs)
-                    _httpx.Client.__init__ = _patched_init
-                except ImportError:
-                    pass
-
-                # Parchear requests también
-                import requests as _req
-                _original_send = _req.Session.send
-                def _proxied_send(self_inner, *args, **kwargs):
-                    if not self_inner.proxies:
-                        self_inner.proxies = {"https": proxy, "http": proxy}
-                    return _original_send(self_inner, *args, **kwargs)
-                _req.Session.send = _proxied_send
 
             client = ClobClient(
                 host="https://clob.polymarket.com",
@@ -190,7 +147,6 @@ class PolymarketAgent:
                 funder=proxy_wallet if proxy_wallet else None
             )
 
-            # Generar o usar API credentials
             api_key = self.config.get("polymarket_api_key")
             api_secret = self.config.get("polymarket_api_secret")
             api_passphrase = self.config.get("polymarket_api_passphrase")
@@ -204,26 +160,30 @@ class PolymarketAgent:
                 )
                 client.set_api_creds(creds)
             else:
-                # Generar credenciales automáticamente
                 logger.info("🔑 Generando API credentials...")
                 creds = client.create_or_derive_api_creds()
                 client.set_api_creds(creds)
                 logger.info(f"✅ API Key generada: {creds.api_key[:10]}...")
-                # Guardar para referencia
-                logger.info(f"💾 Guarda estas credenciales en Railway:")
+                logger.info(f"💾 Guarda estas credenciales:")
                 logger.info(f"   POLYMARKET_API_KEY={creds.api_key}")
                 logger.info(f"   POLYMARKET_API_SECRET={creds.api_secret}")
                 logger.info(f"   POLYMARKET_API_PASSPHRASE={creds.api_passphrase}")
 
-            # Crear orden con OrderArgs
+            # Obtener fee rate del mercado
+            try:
+                fee_rate = float(market.get("makerBaseFee", 0) or 0)
+            except Exception:
+                fee_rate = 0
+
             order_args = OrderArgs(
                 token_id=token_id,
                 price=round(price, 2),
-                size=bet,
-                side="BUY"
+                size=round(bet, 2),
+                side="BUY",
+                fee_rate_bps=int(fee_rate)
             )
 
-            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet}")
+            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet} fee={fee_rate}")
             signed_order = client.create_order(order_args)
             response = client.post_order(signed_order)
 
@@ -243,6 +203,3 @@ class PolymarketAgent:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
             logger.error(error_msg)
             self.notifier.send(error_msg)
-
-
-       
