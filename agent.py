@@ -169,18 +169,11 @@ class PolymarketAgent:
                 logger.info(f"   POLYMARKET_API_SECRET={creds.api_secret}")
                 logger.info(f"   POLYMARKET_API_PASSPHRASE={creds.api_passphrase}")
 
-            # Obtener fee rate del mercado
-            try:
-                fee_rate = float(market.get("makerBaseFee", 0) or 0)
-            except Exception:
-                fee_rate = 0
-
             order_args = OrderArgs(
                 token_id=token_id,
                 price=round(price, 2),
                 size=round(bet, 2),
-                side="BUY",
-                fee_rate_bps=int(fee_rate)
+                side="BUY"
             )
 
             logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet} fee={fee_rate}")
@@ -203,3 +196,4 @@ class PolymarketAgent:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
             logger.error(error_msg)
             self.notifier.send(error_msg)
+        
