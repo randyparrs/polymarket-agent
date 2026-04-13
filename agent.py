@@ -1,199 +1,191 @@
 import logging
-from typing import Dict
+from typing import List, Dict
 from polymarket_api import PolymarketAPI
-from wallet_tracker import WalletTracker
-from telegram_bot import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
-class PolymarketAgent:
-    def __init__(self, config: dict):
-        self.config = config
-        self.api = PolymarketAPI()
-        self.tracker = WalletTracker(self.api)
-        self.notifier = TelegramNotifier(
-            config.get("telegram_token"),
-            config.get("telegram_chat_id")
-        )
-        self.cycle_count = 0
-        self.last_market_id = None
+TOP_WALLETS_TARGET = 15
 
-    def run_cycle(self):
-        self.cycle_count += 1
-        logger.info(f"🔄 Ciclo #{self.cycle_count} iniciado")
+class WalletTracker:
+    def __init__(self, api: PolymarketAPI):
+        self.api = api
+        self._btc5min_experts_cache = []
 
-        market = self.api.get_current_btc5min_market()
+    def get_top_wallets(self, count: int = TOP_WALLETS_TARGET) -> List[str]:
+        """Obtener top wallets del leaderboard"""
+        traders = self.api.get_top_traders(limit=count * 2)
 
-        if not market:
-            logger.warning("⚠️ No se encontró mercado BTC 5min activo. Reintentando...")
-            return
+        if not traders:
+            logger.warning("⚠️ No se pudo obtener leaderboard")
+            return []
 
-        condition_id = market.get("conditionId") or market.get("condition_id") or market.get("id")
-        question = market.get("question", "Bitcoin Up or Down - 5 Minutes")
+        wallets = []
+        for trader in traders:
+            address = (
+                trader.get("proxyWallet") or
+                trader.get("proxy_wallet") or
+                trader.get("address") or
+                trader.get("user")
+            )
+            if address and len(str(address)) > 10:
+                wallets.append(str(address))
+            if len(wallets) >= count:
+                break
 
-        logger.info(f"🔶 Mercado activo: {question}")
-        logger.info(f"   ID: {condition_id}")
+        logger.info(f"✅ {len(wallets)} top wallets obtenidas del leaderboard")
+        return wallets
 
-        if condition_id == self.last_market_id:
-            logger.info("⏭️ Mismo mercado que el ciclo anterior, esperando el siguiente...")
-            return
+    def get_btc5min_experts(self, active_traders: List[str], min_win_rate: float = 0.55, min_trades: int = 3) -> List[str]:
+        """
+        Filtrar traders con mejor historial en BTC 5min.
+        Analiza trades pasados y calcula win rate por wallet.
+        """
+        if self._btc5min_experts_cache:
+            return self._btc5min_experts_cache
 
-        top_wallets = self.tracker.get_top_wallets(self.config["top_wallets_count"])
-        if not top_wallets:
-            logger.warning("⚠️ No se pudieron obtener wallets.")
-            return
+        wallet_stats = {}
 
-        active_traders = self.api.get_active_traders_in_market(condition_id, limit=100)
-        if active_traders:
-            logger.info(f"👥 {len(active_traders)} traders activos en este mercado")
-            combined = list(dict.fromkeys(active_traders + top_wallets))[:30]
+        logger.info(f"🔍 Analizando historial de {len(active_traders)} traders en BTC 5min...")
+
+        for wallet in active_traders:
+            trades = self.api.get_wallet_trades(wallet, limit=200)
+            wins = 0
+            losses = 0
+
+            for trade in trades:
+                try:
+                    slug = str(trade.get("slug", "") or "").lower()
+                    event_slug = str(trade.get("eventSlug", "") or "").lower()
+                    title = str(trade.get("title", "") or "").lower()
+
+                    is_btc5 = (
+                        "btc-updown-5m" in slug or
+                        "btc-updown-5m" in event_slug or
+                        ("bitcoin" in title and "up or down" in title)
+                    )
+
+                    if not is_btc5:
+                        continue
+
+                    # Verificar si fue ganadora
+                    outcome = str(trade.get("outcome", "") or "").lower()
+                    redeemed = trade.get("redeemed", False)
+                    size = float(trade.get("size", 0) or 0)
+                    price = float(trade.get("price", 0) or 0)
+
+                    if redeemed and size > 0:
+                        if price < 0.5:
+                            wins += 1
+                        else:
+                            losses += 1
+                    elif size > 0 and price > 0:
+                        # Trade aún no resuelto, lo ignoramos
+                        pass
+
+                except Exception:
+                    continue
+
+            total = wins + losses
+            if total >= min_trades:
+                win_rate = wins / total
+                wallet_stats[wallet] = {
+                    "win_rate": win_rate,
+                    "wins": wins,
+                    "losses": losses,
+                    "total": total
+                }
+
+        # Filtrar y ordenar por win rate
+        experts = [
+            w for w, s in wallet_stats.items()
+            if s["win_rate"] >= min_win_rate
+        ]
+        experts.sort(key=lambda w: wallet_stats[w]["win_rate"], reverse=True)
+
+        if experts:
+            logger.info(f"⭐ {len(experts)} expertos BTC 5min encontrados (win rate >= {min_win_rate*100:.0f}%)")
+            for w in experts[:5]:
+                s = wallet_stats[w]
+                logger.info(f"   {w[:10]}... W:{s['wins']} L:{s['losses']} ({s['win_rate']*100:.0f}%)")
         else:
-            combined = top_wallets
+            logger.info(f"⚠️ No se encontraron expertos con win rate >= {min_win_rate*100:.0f}%, usando todos")
+            experts = active_traders
 
-        signal = self.tracker.get_btc5min_signal(
-            combined,
-            condition_id,
-            min_consensus=self.config["min_consensus"]
-        )
+        self._btc5min_experts_cache = experts
+        return experts
 
-        if not signal:
-            return
+    def reset_cache(self):
+        self._btc5min_experts_cache = []
 
-        self.last_market_id = condition_id
+    def get_btc5min_signal(self, wallets: List[str], market_condition_id: str, min_consensus: int = 2) -> Dict:
+        """
+        Analizar qué están apostando las wallets en el mercado BTC 5min actual.
+        """
+        votes = {"Up": [], "Down": []}
 
-        if self.config["simulation_mode"]:
-            self._simulate_bet(signal, question, market)
-        else:
-            self._execute_bet(signal, question, market)
+        for wallet in wallets:
+            trades = self.api.get_wallet_trades(wallet, limit=100)
 
-    def _simulate_bet(self, signal: Dict, question: str, market: Dict):
-        direction = signal["direction"]
-        bet = self.config["max_bet_usdc"]
-        msg = (
-            f"🟡 [SIMULACIÓN] Bitcoin 5 Min\n"
-            f"📋 {question}\n"
-            f"{'🟢' if direction == 'Up' else '🔴'} Dirección: {direction}\n"
-            f"👥 Consenso: {signal['consensus_count']}/{self.config['top_wallets_count']} wallets ({signal['confidence_pct']:.1f}%)\n"
-            f"📊 Up: {signal['up_votes']} | Down: {signal['down_votes']}\n"
-            f"💵 Apuesta simulada: ${bet} USDC"
-        )
-        logger.info(msg)
-        self.notifier.send(msg)
+            for trade in trades:
+                try:
+                    outcome = str(trade.get("outcome", "") or "").strip()
+                    title = str(trade.get("title", "") or "").lower()
+                    slug = str(trade.get("slug", "") or "").lower()
+                    event_slug = str(trade.get("eventSlug", "") or "").lower()
+                    price = float(trade.get("price", 0) or 0)
+                    cid = trade.get("conditionId", "")
 
-    def _execute_bet(self, signal: Dict, question: str, market: Dict):
-        try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import OrderArgs
+                    is_btc5 = (
+                        cid == market_condition_id or
+                        "btc-updown-5m" in slug or
+                        "btc-updown-5m" in event_slug or
+                        ("bitcoin" in title and ("up or down" in title) and ("5" in title or "min" in title))
+                    )
 
-            direction = signal["direction"]
-            bet = self.config["max_bet_usdc"]
-            private_key = self.config["private_key"]
-            proxy_wallet = self.config.get("proxy_wallet", "")
+                    if not is_btc5 or price <= 0:
+                        continue
 
-            # Buscar token_id correcto
-            token_id = None
-            price = 0.50
-
-            # Opción 1: campo "tokens"
-            tokens = market.get("tokens", [])
-            for token in tokens:
-                outcome = str(token.get("outcome", "") or "").lower()
-                if direction.lower() in outcome:
-                    token_id = str(token.get("token_id") or token.get("tokenId") or "").strip('"')
-                    price = float(token.get("price", 0.50) or 0.50)
-                    break
-
-            # Opción 2: campo "clobTokenIds"
-            if not token_id:
-                clob_ids = market.get("clobTokenIds", [])
-                if isinstance(clob_ids, list) and len(clob_ids) >= 2:
-                    idx = 0 if direction == "Up" else 1
-                    token_id = str(clob_ids[idx]).strip('"')
-
-            # Opción 3: outcomes + clobTokenIds
-            if not token_id:
-                outcomes = market.get("outcomes", "[]")
-                if isinstance(outcomes, str):
-                    import json
-                    try:
-                        outcomes = json.loads(outcomes)
-                    except Exception:
-                        outcomes = []
-                for i, o in enumerate(outcomes):
-                    if direction.lower() in str(o).lower():
-                        clob_ids = market.get("clobTokenIds", [])
-                        if isinstance(clob_ids, str):
-                            import json
-                            try:
-                                clob_ids = json.loads(clob_ids)
-                            except Exception:
-                                clob_ids = []
-                        if i < len(clob_ids):
-                            token_id = str(clob_ids[i]).strip('"')
+                    outcome_lower = outcome.lower()
+                    if "up" in outcome_lower and wallet not in votes["Up"] and wallet not in votes["Down"]:
+                        votes["Up"].append(wallet)
+                        break
+                    elif "down" in outcome_lower and wallet not in votes["Up"] and wallet not in votes["Down"]:
+                        votes["Down"].append(wallet)
                         break
 
-            logger.info(f"🎯 Token ID encontrado: {token_id} | Precio: {price}")
+                except Exception:
+                    continue
 
-            if not token_id or token_id in ['', '"', "'"]:
-                logger.error(f"❌ No se encontró token válido para {direction}")
-                self.notifier.send(f"❌ Token no encontrado para {direction}")
-                return
+        up_count = len(votes["Up"])
+        down_count = len(votes["Down"])
+        total = up_count + down_count
 
-            client = ClobClient(
-                host="https://clob.polymarket.com",
-                key=private_key,
-                chain_id=137,
-                signature_type=1,
-                funder=proxy_wallet if proxy_wallet else None
-            )
+        logger.info(f"📊 Votos — Up: {up_count} | Down: {down_count} | Total: {total} wallets")
 
-            api_key = self.config.get("polymarket_api_key")
-            api_secret = self.config.get("polymarket_api_secret")
-            api_passphrase = self.config.get("polymarket_api_passphrase")
+        if total == 0:
+            return {}
 
-            if api_key and api_secret and api_passphrase:
-                from py_clob_client.clob_types import ApiCreds
-                creds = ApiCreds(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    api_passphrase=api_passphrase
-                )
-                client.set_api_creds(creds)
-            else:
-                logger.info("🔑 Generando API credentials...")
-                creds = client.create_or_derive_api_creds()
-                client.set_api_creds(creds)
-                logger.info(f"✅ API Key generada: {creds.api_key[:10]}...")
-                logger.info(f"💾 Guarda estas credenciales:")
-                logger.info(f"   POLYMARKET_API_KEY={creds.api_key}")
-                logger.info(f"   POLYMARKET_API_SECRET={creds.api_secret}")
-                logger.info(f"   POLYMARKET_API_PASSPHRASE={creds.api_passphrase}")
+        if up_count == down_count:
+            logger.info("😴 Empate exacto — sin señal.")
+            return {}
+        elif up_count > down_count and up_count >= min_consensus:
+            direction = "Up"
+            consensus = up_count
+        elif down_count > up_count and down_count >= min_consensus:
+            direction = "Down"
+            consensus = down_count
+        else:
+            logger.info("😴 Sin consenso suficiente esta ronda.")
+            return {}
 
-            order_args = OrderArgs(
-                token_id=token_id,
-                price=round(price, 2),
-                size=round(bet, 2),
-                side="BUY"
-            )
+        confidence = consensus / max(len(wallets), 1) * 100
+        logger.info(f"🎯 Señal: {direction} | Consenso: {consensus}/{len(wallets)} ({confidence:.1f}%)")
 
-            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet} fee={fee_rate}")
-            signed_order = client.create_order(order_args)
-            response = client.post_order(signed_order)
-
-            order_id = response.get("orderID") or response.get("id", "N/A")
-            emoji = '🟢' if direction == 'Up' else '🔴'
-            msg = (
-                f"🟢 [REAL] Apuesta ejecutada\n"
-                f"{emoji} Bitcoin 5Min: {direction}\n"
-                f"💵 ${bet} USDC @ {price}\n"
-                f"👥 Consenso: {signal['consensus_count']} wallets\n"
-                f"🔗 Order ID: {order_id}"
-            )
-            logger.info(msg)
-            self.notifier.send(msg)
-
-        except Exception as e:
-            error_msg = f"❌ Error ejecutando apuesta: {e}"
-            logger.error(error_msg)
-            self.notifier.send(error_msg)
-        
+        return {
+            "direction": direction,
+            "consensus_count": consensus,
+            "confidence_pct": confidence,
+            "up_votes": up_count,
+            "down_votes": down_count,
+            "total_voters": total
+        }
