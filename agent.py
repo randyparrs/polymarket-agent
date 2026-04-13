@@ -144,7 +144,7 @@ class PolymarketAgent:
                 host="https://clob.polymarket.com",
                 key=private_key,
                 chain_id=137,
-                signature_type=1,
+                signature_type=2,
                 funder=proxy_wallet if proxy_wallet else None
             )
 
@@ -174,10 +174,11 @@ class PolymarketAgent:
                 token_id=token_id,
                 price=round(price, 2),
                 size=round(bet, 2),
-                side="BUY"
+                side="BUY",
+                fee_rate_bps=1000
             )
 
-            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet} fee={fee_rate}")
+            logger.info(f"📤 Enviando orden: token={token_id[:10]}... price={price} size={bet}")
             signed_order = client.create_order(order_args)
             response = client.post_order(signed_order)
 
@@ -197,6 +198,3 @@ class PolymarketAgent:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
             logger.error(error_msg)
             self.notifier.send(error_msg)
-
-           
-            
