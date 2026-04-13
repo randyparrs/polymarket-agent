@@ -28,6 +28,7 @@ def main():
         "min_consensus": int(os.getenv("MIN_CONSENSUS_WALLETS", "3")),
         "top_wallets_count": int(os.getenv("TOP_WALLETS_COUNT", "15")),
         "check_interval_seconds": int(os.getenv("CHECK_INTERVAL_SECONDS", "60")),
+        "target_wallet": os.getenv("TARGET_WALLET", "0x751a2b86cab503496efd325c8344e10159349ea1"),
     }
 
     if not config["private_key"] and not config["simulation_mode"]:
