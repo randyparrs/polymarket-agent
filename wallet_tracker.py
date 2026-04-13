@@ -189,3 +189,6 @@ class WalletTracker:
             "down_votes": down_count,
             "total_voters": total
         }
+
+
+        
