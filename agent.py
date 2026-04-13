@@ -197,3 +197,6 @@ class PolymarketAgent:
             error_msg = f"❌ Error ejecutando apuesta: {e}"
             logger.error(error_msg)
             self.notifier.send(error_msg)
+
+           
+            
